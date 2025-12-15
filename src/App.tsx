@@ -7,10 +7,8 @@ import {
   Copy,
   Check,
   Gift,
-  ShieldCheck,
   Rocket,
   ArrowRight,
-  BookOpen,
   Snowflake,
   TreePine,
   Compass,
@@ -197,42 +195,68 @@ function useLockBody(lock: boolean) {
   }, [lock]);
 }
 
-/* ===================== FIXED STREAMABLE VIDEO COMPONENT ===================== */
+/* ===================== UPDATED STREAMABLE VIDEO COMPONENT - NO AUTOPLAY ===================== */
 
 function StreamableVideoPlayer({ videoId, title, aspectRatio }: { 
   videoId: string; 
   title: string;
   aspectRatio: number;
 }) {
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  const handlePlayClick = () => {
+    setIsPlaying(true);
+  };
+
   return (
     <div className="group relative overflow-hidden rounded-[28px] border border-yellow-500/30 bg-white/95 p-4 shadow-lg backdrop-blur-sm transition hover:-translate-y-1 hover:shadow-xl">
       <div className="relative w-full overflow-hidden rounded-[22px] border border-zinc-200">
         <div style={{ position: 'relative', width: '100%', height: 0, paddingBottom: `${aspectRatio}%` }}>
-          <iframe
-            src={`https://streamable.com/e/${videoId}?autoplay=1`}
-            title={title}
-            width="100%"
-            height="100%"
-            style={{ border: 'none', position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
-            allowFullScreen
-            allow="autoplay"
-            loading="lazy"
-            className="rounded-[22px]"
-          />
-        </div>
-        {/* FIXED: Play button overlay - now non-blocking with pointer-events: none */}
-        <div className="absolute inset-0 flex items-center justify-center transition-all duration-300 pointer-events-none">
-          <div className="bg-black/30 backdrop-blur-sm rounded-full p-3 transition-all duration-300 transform scale-100 group-hover:scale-110 opacity-90 group-hover:opacity-100">
-            <Video className="h-8 w-8 text-white" />
-          </div>
+          {isPlaying ? (
+            <iframe
+              src={`https://streamable.com/e/${videoId}?autoplay=1`}
+              title={title}
+              width="100%"
+              height="100%"
+              style={{ border: 'none', position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
+              allowFullScreen
+              allow="autoplay"
+              loading="lazy"
+              className="rounded-[22px]"
+            />
+          ) : (
+            <div 
+              className="absolute inset-0 cursor-pointer bg-zinc-100"
+              onClick={handlePlayClick}
+            >
+              {/* Thumbnail with play button */}
+              <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-red-50/50 to-blue-50/50">
+                <div className="text-center">
+                  <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-black/70 backdrop-blur-sm transition-all duration-300 group-hover:scale-110 group-hover:bg-black/90">
+                    <Video className="h-8 w-8 text-white" />
+                  </div>
+                  <p className="text-sm font-bold text-zinc-700">Click to play</p>
+                  <p className="mt-1 text-xs text-zinc-500">{title}</p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
       <div className="mt-3 flex items-center justify-between">
         <div className="text-sm font-black text-zinc-900">{title}</div>
-        <div className="flex items-center gap-1 text-xs text-zinc-500">
-          <Video className="h-3 w-3" />
-          Click to play
-        </div>
+        {!isPlaying && (
+          <div className="flex items-center gap-1 text-xs text-zinc-500">
+            <Video className="h-3 w-3" />
+            Click to play
+          </div>
+        )}
+        {isPlaying && (
+          <div className="flex items-center gap-1 text-xs text-green-600">
+            <div className="h-2 w-2 rounded-full bg-green-500"></div>
+            Playing
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1090,30 +1114,19 @@ export default function App() {
       <MobileMenu open={menuOpen} setOpen={setMenuOpen} />
       <ModalComingSoon open={comingSoon} onClose={() => setComingSoon(false)} />
 
-      {/* HERO - Streamable Video Background with FIXED SIZING */}
+      {/* HERO - Updated Video Background without autoplay */}
       <header className="relative px-4 pt-28 sm:pt-32 overflow-hidden min-h-screen">
-        {/* Video Background - FIXED for all devices */}
-          <div className="absolute inset-0 z-0 overflow-hidden">
-            <div className="absolute inset-0 w-full h-full">
-              {/* Much narrower, still tall, and shifted up */}
-              <div className="absolute top-0 left-0 w-[130%] h-[190%] -translate-x-[15%] -translate-y-[30%] md:-translate-y-[20%]">
-                <iframe
-                  allow="autoplay; fullscreen"
-                  allowFullScreen
-                  src="https://streamable.com/e/6zg015?autoplay=1&muted=1&loop=1&controls=0&background=1"
-                  title="Spankmas Hero Video"
-                  className="w-full h-full"
-                  style={{ border: "none" }}
-                  sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
-                />
-              </div>
-            </div>
-
-            {/* Gradient overlay */}
-            <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/60 to-black/80" />
-          </div>
-
-
+        {/* Static Hero Background - No autoplaying video */}
+        <div className="absolute inset-0 z-0 overflow-hidden">
+          {/* Enhanced red background for hero */}
+          <div className="absolute inset-0 bg-gradient-to-b from-red-900 via-red-800 to-red-900" />
+          
+          {/* Subtle animated gradient overlay */}
+          <div className="absolute inset-0 bg-gradient-to-r from-red-600/20 via-red-500/10 to-red-600/20 animate-pulse" />
+          
+          {/* Sparkle overlay */}
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_30%,rgba(255,255,255,0.1),transparent_40%),radial-gradient(circle_at_80%_70%,rgba(255,215,0,0.05),transparent_40%)]" />
+        </div>
         
         <div className="relative mx-auto grid max-w-6xl items-center gap-8 sm:gap-10 pb-14 h-full sm:grid-cols-2 sm:pb-20 z-20">
           <div className="mt-8 sm:mt-0">
@@ -1143,10 +1156,7 @@ export default function App() {
               <Button variant="ghost" href={LINKS.x} className="bg-white/20 text-yellow-100 hover:bg-white/30 border-yellow-400/20">
                 X Community <ArrowRight className="h-4 w-4" />
               </Button>
-            
             </div>
-
-            
           </div>
 
           {/* Hero Card */}
