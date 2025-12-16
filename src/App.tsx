@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo, useCallback, lazy, Suspense } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Menu,
@@ -54,8 +54,6 @@ const MEME_IMAGES = [
 ];
 
 const LOGO_URL = "https://i.ibb.co/whtDqpwp/gogo.png";
-
-// Your Token Address (this is correct!)
 const TOKEN_ADDRESS = "BMMWMuy1ZFBtDEzzdBvtrNvMZFetcGUfkrdDAYo3pump";
 
 /* ===================== STREAMABLE VIDEOS ===================== */
@@ -106,6 +104,45 @@ interface DexScreenerResponse {
 
 type TokenPairsResponse = DexScreenerPair[];
 
+/* ===================== PERFORMANCE OPTIMIZATIONS ===================== */
+
+// Memoized hooks and components
+const useIsMobile = () => {
+  const [isMobile, setIsMobile] = useState(false);
+  
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+  
+  return isMobile;
+};
+
+// Lazy load images
+const LazyImage = React.memo(({ src, alt, className }: { src: string; alt: string; className?: string }) => {
+  const [isLoaded, setIsLoaded] = useState(false);
+  
+  return (
+    <div className={`${className} ${!isLoaded ? 'animate-pulse bg-gray-200' : ''}`}>
+      <img
+        src={src}
+        alt={alt}
+        loading="lazy"
+        decoding="async"
+        onLoad={() => setIsLoaded(true)}
+        className={`w-full h-full object-cover transition-opacity duration-300 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}
+      />
+    </div>
+  );
+});
+
+LazyImage.displayName = 'LazyImage';
+
 /* ===================== UPDATED DEXSCREENER HOOK ===================== */
 
 function useDexScreenerStats(tokenAddress: string) {
@@ -113,67 +150,64 @@ function useDexScreenerStats(tokenAddress: string) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        setError(null);
+  const fetchData = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
 
-        // 1. Get all pairs for this token
-        const tokenRes = await fetch(
-          `https://api.dexscreener.com/token-pairs/v1/solana/${tokenAddress}`
-        );
+      const tokenRes = await fetch(
+        `https://api.dexscreener.com/token-pairs/v1/solana/${tokenAddress}`
+      );
 
-        if (!tokenRes.ok) {
-          throw new Error("Failed to fetch token pairs");
-        }
-
-        const pairs: TokenPairsResponse = await tokenRes.json();
-
-        if (!pairs || pairs.length === 0) {
-          throw new Error("No trading pairs found for this token");
-        }
-
-        // 2. Pick the main pair (PumpSwap first, then highest liquidity)
-        const mainPair =
-          pairs.find(p => p.dexId === "pumpswap") ||
-          pairs.sort((a, b) => b.liquidity.usd - a.liquidity.usd)[0];
-
-        if (!mainPair) {
-          throw new Error("No valid trading pair found");
-        }
-
-        // 3. Fetch detailed pair stats using the correct PAIR address
-        const pairRes = await fetch(
-          `https://api.dexscreener.com/latest/dex/pairs/solana/${mainPair.pairAddress}`
-        );
-
-        if (!pairRes.ok) {
-          throw new Error("Failed to fetch pair details");
-        }
-
-        const pairJson: DexScreenerResponse = await pairRes.json();
-
-        if (!pairJson.pair) {
-          throw new Error("Pair data is missing");
-        }
-
-        setData(pairJson.pair);
-      } catch (err) {
-        console.error("DexScreener API error:", err);
-        setError(err instanceof Error ? err.message : "Failed to load market data");
-      } finally {
-        setLoading(false);
+      if (!tokenRes.ok) {
+        throw new Error("Failed to fetch token pairs");
       }
-    };
 
+      const pairs: TokenPairsResponse = await tokenRes.json();
+
+      if (!pairs || pairs.length === 0) {
+        throw new Error("No trading pairs found for this token");
+      }
+
+      const mainPair =
+        pairs.find(p => p.dexId === "pumpswap") ||
+        pairs.sort((a, b) => b.liquidity.usd - a.liquidity.usd)[0];
+
+      if (!mainPair) {
+        throw new Error("No valid trading pair found");
+      }
+
+      const pairRes = await fetch(
+        `https://api.dexscreener.com/latest/dex/pairs/solana/${mainPair.pairAddress}`
+      );
+
+      if (!pairRes.ok) {
+        throw new Error("Failed to fetch pair details");
+      }
+
+      const pairJson: DexScreenerResponse = await pairRes.json();
+
+      if (!pairJson.pair) {
+        throw new Error("Pair data is missing");
+      }
+
+      setData(pairJson.pair);
+    } catch (err) {
+      console.error("DexScreener API error:", err);
+      setError(err instanceof Error ? err.message : "Failed to load market data");
+    } finally {
+      setLoading(false);
+    }
+  }, [tokenAddress]);
+
+  useEffect(() => {
     fetchData(); // Initial fetch
     
-    // Refresh every 30 seconds
-    const interval = setInterval(fetchData, 30000);
+    // Refresh less frequently for better performance
+    const interval = setInterval(fetchData, 45000);
     
     return () => clearInterval(interval);
-  }, [tokenAddress]);
+  }, [fetchData]);
 
   return { data, loading, error };
 }
@@ -195,41 +229,67 @@ function useLockBody(lock: boolean) {
   }, [lock]);
 }
 
-/* ===================== UPDATED STREAMABLE VIDEO COMPONENT - NO AUTOPLAY ===================== */
+/* ===================== OPTIMIZED STREAMABLE VIDEO COMPONENT ===================== */
 
-function StreamableVideoPlayer({ videoId, title, aspectRatio }: { 
+const StreamableVideoPlayer = React.memo(({ videoId, title, aspectRatio }: { 
   videoId: string; 
   title: string;
   aspectRatio: number;
-}) {
+}) => {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isInView, setIsInView] = useState(false);
 
-  const handlePlayClick = () => {
+  const handlePlayClick = useCallback(() => {
     setIsPlaying(true);
-  };
+    setIsInView(true);
+  }, []);
+
+  // Only load video when in viewport
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            setIsInView(true);
+          }
+        });
+      },
+      { threshold: 0.1 }
+    );
+
+    const element = document.getElementById(`video-${videoId}`);
+    if (element) observer.observe(element);
+
+    return () => {
+      if (element) observer.unobserve(element);
+    };
+  }, [videoId]);
 
   return (
-    <div className="group relative overflow-hidden rounded-[28px] border border-yellow-500/30 bg-white/95 p-4 shadow-lg backdrop-blur-sm transition hover:-translate-y-1 hover:shadow-xl">
+    <div 
+      id={`video-${videoId}`}
+      className="group relative overflow-hidden rounded-[28px] border border-yellow-500/30 bg-white/95 p-4 shadow-lg backdrop-blur-sm transition hover:-translate-y-1 hover:shadow-xl"
+    >
       <div className="relative w-full overflow-hidden rounded-[22px] border border-zinc-200">
         <div style={{ position: 'relative', width: '100%', height: 0, paddingBottom: `${aspectRatio}%` }}>
-          {isPlaying ? (
+          {isPlaying && isInView ? (
             <iframe
-              src={`https://streamable.com/e/${videoId}?autoplay=1`}
+              src={`https://streamable.com/e/${videoId}?autoplay=1&muted=1`}
               title={title}
               width="100%"
               height="100%"
               style={{ border: 'none', position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               allowFullScreen
-              allow="autoplay"
               loading="lazy"
               className="rounded-[22px]"
+              sandbox="allow-same-origin allow-scripts allow-popups"
             />
           ) : (
             <div 
               className="absolute inset-0 cursor-pointer bg-zinc-100"
               onClick={handlePlayClick}
             >
-              {/* Thumbnail with play button */}
               <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-red-50/50 to-blue-50/50">
                 <div className="text-center">
                   <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-black/70 backdrop-blur-sm transition-all duration-300 group-hover:scale-110 group-hover:bg-black/90">
@@ -260,7 +320,9 @@ function StreamableVideoPlayer({ videoId, title, aspectRatio }: {
       </div>
     </div>
   );
-}
+});
+
+StreamableVideoPlayer.displayName = 'StreamableVideoPlayer';
 
 function VideoGallery() {
   return (
@@ -286,9 +348,9 @@ function VideoGallery() {
   );
 }
 
-/* ===================== UI PRIMITIVES ===================== */
+/* ===================== OPTIMIZED UI PRIMITIVES ===================== */
 
-function Button({
+const Button = React.memo(({
   children,
   href,
   onClick,
@@ -300,7 +362,7 @@ function Button({
   onClick?: () => void;
   variant?: "primary" | "ghost" | "soft";
   className?: string;
-}) {
+}) => {
   const base =
     "inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-sm font-extrabold transition active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40";
   const styles =
@@ -317,6 +379,7 @@ function Button({
         href={href}
         target="_blank"
         rel="noreferrer"
+        onClick={onClick}
       >
         {children}
       </a>
@@ -327,26 +390,26 @@ function Button({
       {children}
     </button>
   );
-}
+});
 
-/* ===================== GLITTERY RED BACKGROUND (NO SANTA) ===================== */
+Button.displayName = 'Button';
 
-function GlitteryRedBackground() {
-  const [glitterParticles] = useState(() =>
-    Array.from({ length: 50 }).map(() => ({
+/* ===================== OPTIMIZED GLITTERY RED BACKGROUND ===================== */
+
+const GlitteryRedBackground = React.memo(() => {
+  const glitterParticles = useMemo(() =>
+    Array.from({ length: 20 }).map(() => ({
       left: `${Math.random() * 100}%`,
       top: `${Math.random() * 100}%`,
       animationDelay: `${Math.random() * 2}s`,
       animationDuration: `${1 + Math.random() * 2}s`,
     }))
-  );
+  , []);
 
   return (
     <div className="absolute inset-0 overflow-hidden">
-      {/* Enhanced red background - no Santa image */}
       <div className="absolute inset-0 bg-gradient-to-b from-red-900/95 via-red-800/90 to-red-900/95" />
       
-      {/* Glitter particles */}
       <div className="absolute inset-0">
         {glitterParticles.map((particle, i) => (
           <div
@@ -362,13 +425,10 @@ function GlitteryRedBackground() {
         ))}
       </div>
       
-      {/* Sparkle overlay */}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_30%,rgba(255,255,255,0.08),transparent_40%),radial-gradient(circle_at_80%_70%,rgba(255,215,0,0.06),transparent_40%)]" />
       
-      {/* Animated shimmer */}
       <div className="absolute inset-0 animate-shimmer-glitter" />
       
-      {/* Mobile optimization */}
       <div className="absolute inset-0 bg-gradient-to-t from-black/15 via-transparent to-black/10 md:hidden" />
       
       <style>{`
@@ -389,20 +449,63 @@ function GlitteryRedBackground() {
       `}</style>
     </div>
   );
-}
+});
 
-/* ===================== WORKING DEXSCREENER STATS WIDGET ===================== */
+GlitteryRedBackground.displayName = 'GlitteryRedBackground';
 
-function DexScreenerStats() {
+/* ===================== DEXSCREENER STATS WIDGET ===================== */
+
+const DexScreenerStats = React.memo(() => {
   const { data, loading, error } = useDexScreenerStats(TOKEN_ADDRESS);
   
-  // Format data if available
-  const price = data ? parseFloat(data.priceUsd).toFixed(6) : "0.000000";
-  const volume = data ? `$${data.volume.h24.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "$0";
-  const liquidity = data ? `$${data.liquidity.usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "$0";
-  const change24h = data ? data.priceChange.h24.toFixed(2) : "0.00";
-  const isPositive = data ? data.priceChange.h24 >= 0 : true;
-  const marketCap = data && data.marketCap ? `$${data.marketCap.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "Calculating...";
+  const formattedData = useMemo(() => {
+    if (!data) return null;
+    
+    return {
+      price: parseFloat(data.priceUsd).toFixed(6),
+      volume: `$${data.volume.h24.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+      liquidity: `$${data.liquidity.usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+      change24h: data.priceChange.h24.toFixed(2),
+      isPositive: data.priceChange.h24 >= 0,
+      marketCap: data.marketCap ? `$${data.marketCap.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "Calculating...",
+    };
+  }, [data]);
+
+  if (loading) {
+    return (
+      <div className="rounded-[30px] border border-yellow-500/30 bg-white/95 p-6 shadow-lg backdrop-blur-sm">
+        <div className="min-h-[300px] flex items-center justify-center rounded-2xl border border-zinc-200 bg-gradient-to-br from-red-50 to-blue-50">
+          <div className="text-center">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-red-600 border-t-transparent mx-auto"></div>
+            <p className="mt-3 text-sm text-zinc-600">Loading live market data...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !formattedData) {
+    return (
+      <div className="rounded-[30px] border border-yellow-500/30 bg-white/95 p-6 shadow-lg backdrop-blur-sm">
+        <div className="min-h-[300px] flex flex-col items-center justify-center rounded-2xl border border-zinc-200 bg-gradient-to-br from-red-50 to-blue-50 p-8">
+          <div className="rounded-full bg-red-100 p-3">
+            <X className="h-6 w-6 text-red-600" />
+          </div>
+          <p className="mt-3 text-sm text-zinc-600">Unable to load live data</p>
+          <div className="mt-4 flex flex-col gap-2">
+            <a
+              href={`https://dexscreener.com/solana/${TOKEN_ADDRESS}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-purple-600 hover:underline"
+            >
+              View on DexScreener →
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-[30px] border border-yellow-500/30 bg-white/95 p-6 shadow-lg backdrop-blur-sm">
@@ -421,109 +524,66 @@ function DexScreenerStats() {
         </div>
       </div>
       
-      {loading ? (
-        <div className="min-h-[300px] flex items-center justify-center rounded-2xl border border-zinc-200 bg-gradient-to-br from-red-50 to-blue-50">
-          <div className="text-center">
-            <div className="h-8 w-8 animate-spin rounded-full border-4 border-red-600 border-t-transparent mx-auto"></div>
-            <p className="mt-3 text-sm text-zinc-600">Loading live market data...</p>
-            <p className="text-xs text-zinc-500 mt-1">Fetching trading pairs...</p>
+      <div className="grid grid-cols-2 gap-4 mb-6">
+        <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <div className="text-xs font-black text-zinc-500">Current Price</div>
+          <div className="mt-2 text-2xl font-black text-zinc-900">${formattedData.price}</div>
+          <div className={`mt-2 inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-black ${formattedData.isPositive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+            {formattedData.isPositive ? '↗' : '↘'} {formattedData.change24h}%
           </div>
         </div>
-      ) : error ? (
-        <div className="min-h-[300px] flex flex-col items-center justify-center rounded-2xl border border-zinc-200 bg-gradient-to-br from-red-50 to-blue-50 p-8">
-          <div className="rounded-full bg-red-100 p-3">
-            <X className="h-6 w-6 text-red-600" />
+        
+        <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <div className="text-xs font-black text-zinc-500">24h Volume</div>
+          <div className="mt-2 text-2xl font-black text-zinc-900">{formattedData.volume}</div>
+          <div className="mt-2 text-xs text-zinc-600">Trading activity</div>
+        </div>
+        
+        <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <div className="text-xs font-black text-zinc-500">Liquidity</div>
+          <div className="mt-2 text-2xl font-black text-zinc-900">{formattedData.liquidity}</div>
+          <div className="mt-2 text-xs text-zinc-600">Pool depth</div>
+        </div>
+        
+        <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <div className="text-xs font-black text-zinc-500">Market Cap</div>
+          <div className="mt-2 text-2xl font-black text-zinc-900">{formattedData.marketCap}</div>
+          <div className="mt-2 text-xs text-zinc-600">Fully diluted</div>
+        </div>
+      </div>
+      
+      <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <div className="text-xs font-black text-zinc-500">Pair</div>
+            <div className="mt-1 text-sm font-black text-zinc-900">
+              {data?.baseToken?.symbol || "SPANKMAS"} / {data?.quoteToken?.symbol || "SOL"}
+            </div>
           </div>
-          <p className="mt-3 text-sm text-zinc-600">Unable to load live data</p>
-          <p className="text-xs text-zinc-500 mt-1 text-center">{error}</p>
-          <div className="mt-4 flex flex-col gap-2">
-            <button
-              onClick={() => window.location.reload()}
-              className="rounded-2xl border border-zinc-200 bg-white px-4 py-2 text-sm font-extrabold text-zinc-900 hover:bg-zinc-50"
-            >
-              Retry
-            </button>
-            <a
-              href={`https://dexscreener.com/solana/${TOKEN_ADDRESS}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-purple-600 hover:underline"
-            >
-              View on DexScreener →
-            </a>
+          <div>
+            <div className="text-xs font-black text-zinc-500">DEX</div>
+            <div className="mt-1 text-sm font-black text-zinc-900">
+              {data?.dexId ? data.dexId.toUpperCase() : "PumpSwap"}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs font-black text-zinc-500">Last Updated</div>
+            <div className="mt-1 text-sm font-black text-zinc-900">
+              {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </div>
           </div>
         </div>
-      ) : (
-        <>
-          {/* Main Stats Grid */}
-          <div className="grid grid-cols-2 gap-4 mb-6">
-            {/* Price Card */}
-            <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
-              <div className="text-xs font-black text-zinc-500">Current Price</div>
-              <div className="mt-2 text-2xl font-black text-zinc-900">${price}</div>
-              <div className={`mt-2 inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-black ${isPositive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                {isPositive ? '↗' : '↘'} {change24h}%
-              </div>
-            </div>
-            
-            {/* 24h Volume */}
-            <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
-              <div className="text-xs font-black text-zinc-500">24h Volume</div>
-              <div className="mt-2 text-2xl font-black text-zinc-900">{volume}</div>
-              <div className="mt-2 text-xs text-zinc-600">Trading activity</div>
-            </div>
-            
-            {/* Liquidity */}
-            <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
-              <div className="text-xs font-black text-zinc-500">Liquidity</div>
-              <div className="mt-2 text-2xl font-black text-zinc-900">{liquidity}</div>
-              <div className="mt-2 text-xs text-zinc-600">Pool depth</div>
-            </div>
-            
-            {/* Market Cap */}
-            <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
-              <div className="text-xs font-black text-zinc-500">Market Cap</div>
-              <div className="mt-2 text-2xl font-black text-zinc-900">{marketCap}</div>
-              <div className="mt-2 text-xs text-zinc-600">Fully diluted</div>
-            </div>
-          </div>
-          
-          {/* Additional Info */}
-          <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <div className="text-xs font-black text-zinc-500">Pair</div>
-                <div className="mt-1 text-sm font-black text-zinc-900">
-                  {data?.baseToken?.symbol || "SPANKMAS"} / {data?.quoteToken?.symbol || "SOL"}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs font-black text-zinc-500">DEX</div>
-                <div className="mt-1 text-sm font-black text-zinc-900">
-                  {data?.dexId ? data.dexId.toUpperCase() : "PumpSwap"}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs font-black text-zinc-500">Last Updated</div>
-                <div className="mt-1 text-sm font-black text-zinc-900">
-                  {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          {/* Pair Address Info */}
-          <div className="mt-4 rounded-2xl border border-purple-200 bg-purple-50 p-4">
-            <div className="text-xs font-black text-purple-700">Active Trading Pair</div>
-            <div className="mt-1 break-all font-mono text-xs text-purple-800">
-              {data?.pairAddress?.substring(0, 30)}...
-            </div>
-            <div className="mt-2 text-xs text-purple-600">
-              Auto-detected from DexScreener • Updates every 30s
-            </div>
-          </div>
-        </>
-      )}
+      </div>
+      
+      <div className="mt-4 rounded-2xl border border-purple-200 bg-purple-50 p-4">
+        <div className="text-xs font-black text-purple-700">Active Trading Pair</div>
+        <div className="mt-1 break-all font-mono text-xs text-purple-800">
+          {data?.pairAddress?.substring(0, 30)}...
+        </div>
+        <div className="mt-2 text-xs text-purple-600">
+          Auto-detected from DexScreener • Updates every 45s
+        </div>
+      </div>
       
       <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-xs text-zinc-500">
         <div className="flex items-center gap-1">
@@ -538,9 +598,11 @@ function DexScreenerStats() {
       </div>
     </div>
   );
-}
+});
 
-/* ===================== ENHANCED SNOW - REDUCED FOR MOBILE PERFORMANCE ===================== */
+DexScreenerStats.displayName = 'DexScreenerStats';
+
+/* ===================== OPTIMIZED SNOW - REDUCED PARTICLES ===================== */
 
 type EnhancedFlake = { 
   left: number; 
@@ -554,20 +616,23 @@ type EnhancedFlake = {
   xEnd: number;
 };
 
-function EnhancedSnowOverlay({ density = 150, intensity = 0.8 }: { density?: number; intensity?: number }) {
-  const [flakes] = useState<EnhancedFlake[]>(() =>
-    Array.from({ length: density }).map(() => ({
+const EnhancedSnowOverlay = React.memo(({ density = 60, intensity = 0.6 }: { density?: number; intensity?: number }) => {
+  const isMobile = useIsMobile();
+  const actualDensity = isMobile ? Math.floor(density * 0.5) : density;
+  
+  const flakes = useMemo(() =>
+    Array.from({ length: actualDensity }).map(() => ({
       left: Math.random() * 100,
       delay: Math.random() * 15,
-      duration: 6 + Math.random() * 12,
-      size: 3 + Math.random() * 6,
-      opacity: 0.5 + Math.random() * 0.4,
-      blur: Math.random() * 1.5,
+      duration: 8 + Math.random() * 12, // Slower animation
+      size: 2 + Math.random() * 4, // Smaller particles
+      opacity: 0.3 + Math.random() * 0.3, // Less opaque
+      blur: Math.random() * 1,
       depth: Math.random(),
-      xStart: Math.random() * 40 - 20,
-      xEnd: Math.random() * 40 - 20,
+      xStart: Math.random() * 20 - 10, // Reduced movement
+      xEnd: Math.random() * 20 - 10,
     }))
-  );
+  , [actualDensity]);
 
   return (
     <>
@@ -575,7 +640,7 @@ function EnhancedSnowOverlay({ density = 150, intensity = 0.8 }: { density?: num
         {flakes.map((f, i) => (
           <span
             key={i}
-            className="absolute top-[-20px] animate-snow rounded-full bg-white shadow-[0_0_15px_rgba(255,255,255,0.9)]"
+            className="absolute top-[-20px] animate-snow rounded-full bg-white"
             style={{
               left: `${f.left}%`,
               width: `${f.size}px`,
@@ -583,8 +648,8 @@ function EnhancedSnowOverlay({ density = 150, intensity = 0.8 }: { density?: num
               opacity: f.opacity * intensity,
               animationDelay: `${f.delay}s`,
               animationDuration: `${f.duration}s`,
-              filter: `blur(${f.blur}px) drop-shadow(0 2px 4px rgba(255,255,255,0.6))`,
-              transform: `translateZ(${f.depth * 20}px)`,
+              filter: `blur(${f.blur}px)`,
+              transform: `translateZ(${f.depth * 10}px)`,
               '--x-start': `${f.xStart}px`,
               '--x-end': `${f.xEnd}px`,
             } as React.CSSProperties}
@@ -612,54 +677,39 @@ function EnhancedSnowOverlay({ density = 150, intensity = 0.8 }: { density?: num
       `}</style>
     </>
   );
-}
+});
 
-/* ===================== SHINY CHROME GOLD TEXT ===================== */
+EnhancedSnowOverlay.displayName = 'EnhancedSnowOverlay';
 
-function ShinyChromeGoldText({ children, size = "large" }: { children: React.ReactNode; size?: "large" | "medium" }) {
+/* ===================== OPTIMIZED SHINY CHROME GOLD TEXT ===================== */
+
+const ShinyChromeGoldText = React.memo(({ children, size = "large" }: { children: React.ReactNode; size?: "large" | "medium" }) => {
   const textSize = size === "large" ? "text-5xl md:text-7xl" : "text-4xl md:text-6xl";
   
   return (
     <div className="relative inline-block">
       <div className={`${textSize} font-black relative z-10`}>
-        <div className="absolute inset-0 bg-gradient-to-r from-yellow-400 via-yellow-200 to-yellow-400 bg-clip-text text-transparent animate-shimmer-chrome opacity-90">
-          {children}
-        </div>
-        <div className="absolute inset-0 bg-gradient-to-r from-yellow-300 via-yellow-100 to-yellow-300 bg-clip-text text-transparent animate-shimmer-chrome opacity-80" style={{ animationDelay: '0.1s' }}>
-          {children}
-        </div>
-        <div className="absolute inset-0 bg-gradient-to-r from-yellow-500 via-yellow-300 to-yellow-500 bg-clip-text text-transparent animate-shimmer-chrome opacity-70" style={{ animationDelay: '0.2s' }}>
-          {children}
-        </div>
         <div className="relative bg-gradient-to-r from-yellow-600 via-yellow-400 to-yellow-600 bg-clip-text text-transparent">
           {children}
         </div>
       </div>
       
-      {/* Glitter effect */}
-      <div className="absolute -inset-4 -z-10 opacity-30">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,215,0,0.4),transparent_50%),radial-gradient(circle_at_70%_80%,rgba(255,255,255,0.3),transparent_50%)] animate-pulse" />
-      </div>
-
       <style>{`
         @keyframes shimmer-chrome {
           0% { background-position: -200% center; }
           100% { background-position: 200% center; }
         }
-        .animate-shimmer-chrome {
-          background-size: 200% auto;
-          animation: shimmer-chrome 2.5s ease-in-out infinite;
-        }
       `}</style>
     </div>
   );
-}
+});
 
-/* ===================== MEME GALLERY ===================== */
+ShinyChromeGoldText.displayName = 'ShinyChromeGoldText';
 
-function MemeGallery() {
-  // Use the first 12 images for the gallery
-  const displayedImages = MEME_IMAGES.slice(0, 12);
+/* ===================== OPTIMIZED MEME GALLERY WITH LAZY LOADING ===================== */
+
+const MemeGallery = React.memo(() => {
+  const displayedImages = MEME_IMAGES.slice(0, 8); // Show fewer images initially
 
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -669,14 +719,10 @@ function MemeGallery() {
           className="group rounded-[28px] border border-yellow-500/30 bg-white/95 p-4 shadow-lg backdrop-blur-sm transition hover:-translate-y-1 hover:shadow-xl"
         >
           <div className="aspect-[4/3] w-full overflow-hidden rounded-[22px] border border-zinc-200">
-            <img 
-              src={img} 
+            <LazyImage 
+              src={img}
               alt={`Spankmas Meme ${i + 1}`}
-              className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-              onError={(e) => {
-                const target = e.target as HTMLImageElement;
-                target.style.display = 'none';
-              }}
+              className="h-full w-full"
             />
           </div>
           <div className="mt-3 flex items-center justify-between">
@@ -687,28 +733,30 @@ function MemeGallery() {
       ))}
     </div>
   );
-}
+});
 
-/* ===================== ENHANCED NAV WITH UPDATED LOGO ===================== */
+MemeGallery.displayName = 'MemeGallery';
 
-function Nav({
+/* ===================== OPTIMIZED NAV ===================== */
+
+const Nav = React.memo(({
   open,
   setOpen,
 }: {
   open: boolean;
   setOpen: (v: boolean) => void;
-}) {
-  const items = [
+}) => {
+  const items = useMemo(() => [
     { label: "Lore", href: "#lore" },
     { label: "Tokenomics", href: "#tokenomics" },
     { label: "Chart", href: "#chart" },
     { label: "Memes", href: "#memes" },
     { label: "Community", href: "#community" },
-  ];
+  ], []);
 
   const [copied, setCopied] = useState(false);
 
-  const copyCA = async () => {
+  const copyCA = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(CA);
       setCopied(true);
@@ -716,21 +764,17 @@ function Nav({
     } catch (err) {
       console.error('Failed to copy:', err);
     }
-  };
+  }, []);
 
   return (
     <div className="fixed left-0 right-0 top-0 z-40 border-b border-zinc-200/50 bg-white/90 backdrop-blur-md">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
         <a href="#top" className="flex items-center gap-3">
           <div className="relative h-10 w-10 rounded-2xl overflow-hidden bg-gradient-to-br from-red-600 to-green-600 shadow-lg">
-            <img 
+            <LazyImage 
               src={LOGO_URL}
-              alt="Spankmas Logo" 
-              className="h-full w-full object-cover"
-              onError={(e) => {
-                const target = e.target as HTMLImageElement;
-                target.style.display = 'none';
-              }}
+              alt="Spankmas Logo"
+              className="h-full w-full"
             />
           </div>
           <div className="leading-tight">
@@ -781,27 +825,29 @@ function Nav({
       </div>
     </div>
   );
-}
+});
 
-function MobileMenu({
+Nav.displayName = 'Nav';
+
+const MobileMenu = React.memo(({
   open,
   setOpen,
 }: {
   open: boolean;
   setOpen: (v: boolean) => void;
-}) {
+}) => {
   useLockBody(open);
   const [copied, setCopied] = useState(false);
 
-  const items = [
+  const items = useMemo(() => [
     { label: "Lore", href: "#lore" },
     { label: "Tokenomics", href: "#tokenomics" },
     { label: "Chart", href: "#chart" },
     { label: "Memes", href: "#memes" },
     { label: "Community", href: "#community" },
-  ];
+  ], []);
 
-  const copyCA = async () => {
+  const copyCA = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(CA);
       setCopied(true);
@@ -809,7 +855,7 @@ function MobileMenu({
     } catch (err) {
       console.error('Failed to copy:', err);
     }
-  };
+  }, []);
 
   return (
     <AnimatePresence>
@@ -832,10 +878,10 @@ function MobileMenu({
             <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-4">
               <div className="flex items-center gap-3">
                 <div className="relative h-8 w-8 rounded-2xl overflow-hidden bg-gradient-to-br from-red-600 to-green-600">
-                  <img 
+                  <LazyImage 
                     src={LOGO_URL}
-                    alt="Spankmas Logo" 
-                    className="h-full w-full object-cover"
+                    alt="Spankmas Logo"
+                    className="h-full w-full"
                   />
                 </div>
                 <div className="text-sm font-black text-zinc-900">{BRAND.name}</div>
@@ -893,14 +939,16 @@ function MobileMenu({
       )}
     </AnimatePresence>
   );
-}
+});
 
-/* ===================== FEATURES ===================== */
+MobileMenu.displayName = 'MobileMenu';
 
-function CopyCA() {
+/* ===================== COPY CA COMPONENT ===================== */
+
+const CopyCA = React.memo(() => {
   const [copied, setCopied] = useState(false);
   
-  const copyToClipboard = async () => {
+  const copyToClipboard = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(CA);
       setCopied(true);
@@ -908,7 +956,7 @@ function CopyCA() {
     } catch (err) {
       console.error('Failed to copy:', err);
     }
-  };
+  }, []);
   
   return (
     <button
@@ -920,11 +968,13 @@ function CopyCA() {
       {copied ? "Copied!" : "Copy CA"}
     </button>
   );
-}
+});
+
+CopyCA.displayName = 'CopyCA';
 
 /* ===================== MODAL COMING SOON ===================== */
 
-function ModalComingSoon({ open, onClose }: { open: boolean; onClose: () => void }) {
+const ModalComingSoon = React.memo(({ open, onClose }: { open: boolean; onClose: () => void }) => {
   useLockBody(open);
 
   return (
@@ -985,11 +1035,13 @@ function ModalComingSoon({ open, onClose }: { open: boolean; onClose: () => void
       )}
     </AnimatePresence>
   );
-}
+});
 
-/* ===================== GLITTERY SECTION COMPONENT ===================== */
+ModalComingSoon.displayName = 'ModalComingSoon';
 
-function GlitterySection({
+/* ===================== OPTIMIZED GLITTERY SECTION COMPONENT ===================== */
+
+const GlitterySection = React.memo(({
   id,
   kicker,
   title,
@@ -1001,7 +1053,7 @@ function GlitterySection({
   title: string;
   subtitle?: string;
   children: React.ReactNode;
-}) {
+}) => {
   return (
     <section id={id} className="relative scroll-mt-24 px-4 py-16 sm:py-20 overflow-hidden">
       <GlitteryRedBackground />
@@ -1022,11 +1074,13 @@ function GlitterySection({
       </div>
     </section>
   );
-}
+});
+
+GlitterySection.displayName = 'GlitterySection';
 
 /* ===================== REAL SPANKMAS LORE SECTION ===================== */
 
-function RealSpankmasLore() {
+const RealSpankmasLore = React.memo(() => {
   return (
     <GlitterySection
       id="lore"
@@ -1035,13 +1089,6 @@ function RealSpankmasLore() {
       subtitle="As told by Aussie, the Meme creator/artist of Spankmas"
     >
       <div className="relative rounded-[40px] border-2 border-yellow-200/50 bg-gradient-to-b from-yellow-50/80 to-amber-50/60 p-8 sm:p-12 shadow-2xl backdrop-blur-sm">
-        {/* Shine Effect */}
-        <div className="absolute inset-0 rounded-[40px] bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shine" />
-        
-        {/* Decorative Elements */}
-        <div className="absolute -top-3 -left-3 h-12 w-12 rounded-full bg-gradient-to-br from-red-500 to-green-500 opacity-20 blur-sm" />
-        <div className="absolute -bottom-3 -right-3 h-16 w-16 rounded-full bg-gradient-to-br from-green-500 to-red-500 opacity-20 blur-sm" />
-        
         <div className="relative space-y-6">
           <div className="text-center mb-8">
             <ShinyChromeGoldText size="medium">
@@ -1086,72 +1133,91 @@ function RealSpankmasLore() {
           </div>
         </div>
       </div>
-
-      <style>{`
-        @keyframes shine {
-          0% { transform: translateX(-100%) skewX(-15deg); }
-          100% { transform: translateX(200%) skewX(-15deg); }
-        }
-        .animate-shine {
-          animation: shine 3s ease-in-out infinite;
-        }
-      `}</style>
     </GlitterySection>
   );
-}
+});
 
-/* ===================== APP ===================== */
+RealSpankmasLore.displayName = 'RealSpankmasLore';
+
+/* ===================== OPTIMIZED HERO VIDEO ===================== */
+
+const HeroVideo = React.memo(() => {
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [useFallback, setUseFallback] = useState(false);
+  
+  useEffect(() => {
+    // Check if we should use fallback for mobile
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    if (isMobile) {
+      setUseFallback(true);
+    }
+  }, []);
+
+  if (useFallback) {
+    return (
+      <div className="absolute inset-0 z-0 overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-b from-red-900 via-red-800 to-red-900"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="absolute inset-0 z-0 overflow-hidden">
+      <div className="absolute inset-0 w-full h-full">
+        <div className="absolute top-0 left-0 w-full h-full">
+          <div className="relative w-full h-full">
+            <div className="absolute inset-0 w-full h-full flex items-center justify-center">
+              <div className="relative w-full h-full min-w-[100%] min-h-[100%]">
+                <iframe
+                  allow="autoplay; fullscreen"
+                  allowFullScreen
+                  src="https://streamable.com/e/6zg015?autoplay=1&muted=1&loop=1&controls=0&background=1"
+                  title="Spankmas Hero Video"
+                  className={`absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-[200%] h-[200%] 
+                    min-w-[200%] min-h-[200%] max-w-none
+                    sm:w-[180%] sm:h-[180%]
+                    md:w-[160%] md:h-[160%]
+                    lg:w-[140%] lg:h-[140%]
+                    xl:w-[120%] xl:h-[120%]
+                    2xl:w-[110%] 2xl:h-[110%]
+                    ${!isLoaded ? 'opacity-0' : 'opacity-100'} transition-opacity duration-300`}
+                  style={{ border: "none" }}
+                  sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                  onLoad={() => setIsLoaded(true)}
+                />
+                {!isLoaded && (
+                  <div className="absolute inset-0 bg-gradient-to-b from-red-900 via-red-800 to-red-900"></div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/60 to-black/80" />
+      </div>
+    </div>
+  );
+});
+
+HeroVideo.displayName = 'HeroVideo';
+
+/* ===================== MAIN APP COMPONENT ===================== */
 
 export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [comingSoon, setComingSoon] = useState(false);
+  const isMobile = useIsMobile();
 
   return (
     <div id="top" className="min-h-screen bg-white text-zinc-900 relative">
-      {/* REDUCED SNOW EFFECT for better mobile performance */}
-      <EnhancedSnowOverlay density={150} intensity={0.8} />
+      {/* REDUCED SNOW EFFECT - Optimized for performance */}
+      <EnhancedSnowOverlay density={isMobile ? 40 : 80} intensity={0.5} />
       <Nav open={menuOpen} setOpen={setMenuOpen} />
       <MobileMenu open={menuOpen} setOpen={setMenuOpen} />
       <ModalComingSoon open={comingSoon} onClose={() => setComingSoon(false)} />
 
-      {/* HERO - RESPONSIVE Video Background for iPad and all devices */}
+      {/* HERO SECTION */}
       <header className="relative px-4 pt-28 sm:pt-32 overflow-hidden min-h-screen">
-        {/* Video Background - RESPONSIVE for all devices */}
-        <div className="absolute inset-0 z-0 overflow-hidden">
-          <div className="absolute inset-0 w-full h-full">
-            {/* Responsive container with aspect ratio for iPad optimization */}
-            <div className="absolute top-0 left-0 w-full h-full">
-              <div className="relative w-full h-full">
-                {/* Responsive iframe that works on all devices including iPad */}
-                <div className="absolute inset-0 w-full h-full flex items-center justify-center">
-                  <div className="relative w-full h-full min-w-[100%] min-h-[100%]">
-                    <iframe
-                      allow="autoplay; fullscreen"
-                      allowFullScreen
-                      src="https://streamable.com/e/6zg015?autoplay=1&muted=1&loop=1&controls=0&background=1"
-                      title="Spankmas Hero Video"
-                      className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-[200%] h-[200%] 
-                        min-w-[200%] min-h-[200%] max-w-none
-                        sm:w-[180%] sm:h-[180%]
-                        md:w-[160%] md:h-[160%]
-                        lg:w-[140%] lg:h-[140%]
-                        xl:w-[120%] xl:h-[120%]
-                        2xl:w-[110%] 2xl:h-[110%]"
-                      style={{ border: "none" }}
-                      sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Gradient overlay */}
-          <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/60 to-black/80" />
-          
-          {/* Fallback image for very small screens */}
-          <div className="absolute inset-0 bg-gradient-to-b from-red-900 via-red-800 to-red-900 md:hidden"></div>
-        </div>
+        <HeroVideo />
         
         <div className="relative mx-auto grid max-w-6xl items-center gap-8 sm:gap-10 pb-14 h-full sm:grid-cols-2 sm:pb-20 z-20">
           <div className="mt-8 sm:mt-0">
@@ -1226,7 +1292,7 @@ export default function App() {
       {/* REAL SPANKMAS LORE SECTION */}
       <RealSpankmasLore />
 
-      {/* TOKENOMICS - Glittery Red Background Section */}
+      {/* TOKENOMICS SECTION */}
       <GlitterySection
         id="tokenomics"
         kicker="Token"
@@ -1284,7 +1350,7 @@ export default function App() {
         </div>
       </GlitterySection>
 
-      {/* CHART SECTION - Glittery Red Background */}
+      {/* CHART SECTION */}
       <GlitterySection
         id="chart"
         kicker="Live Market Data"
@@ -1294,14 +1360,13 @@ export default function App() {
         <DexScreenerStats />
       </GlitterySection>
 
-      {/* MEMES - Glittery Red Background Section */}
+      {/* MEMES SECTION */}
       <GlitterySection
         id="memes"
         kicker="Media Gallery"
         title="Spankmas Memes & Videos"
         subtitle="The hottest Spankmas content - memes and videos from the community"
       >
-        {/* Image Gallery Subsection */}
         <div className="mt-10">
           <div className="mb-8 flex items-center gap-2">
             <div className="rounded-full bg-gradient-to-r from-red-500 to-orange-500 p-2">
@@ -1312,11 +1377,10 @@ export default function App() {
           <MemeGallery />
         </div>
 
-        {/* Video Gallery Subsection */}
         <VideoGallery />
       </GlitterySection>
 
-      {/* COMMUNITY - Glittery Red Background Section */}
+      {/* COMMUNITY SECTION */}
       <GlitterySection
         id="community"
         kicker="Join the Movement"
@@ -1366,17 +1430,17 @@ export default function App() {
         </div>
       </GlitterySection>
 
-      {/* FOOTER - White Background */}
+      {/* FOOTER */}
       <footer className="border-t border-zinc-200 bg-white px-4 py-10">
         <div className="mx-auto max-w-6xl">
           <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div className="flex items-center gap-3">
                 <div className="relative h-8 w-8 rounded-2xl overflow-hidden bg-gradient-to-br from-red-600 to-green-600">
-                  <img 
+                  <LazyImage 
                     src={LOGO_URL}
-                    alt="Spankmas Logo" 
-                    className="h-full w-full object-cover"
+                    alt="Spankmas Logo"
+                    className="h-full w-full"
                   />
                 </div>
                 <div className="text-sm font-black text-zinc-900">{BRAND.name}</div>
