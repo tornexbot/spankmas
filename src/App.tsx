@@ -1114,18 +1114,43 @@ export default function App() {
       <MobileMenu open={menuOpen} setOpen={setMenuOpen} />
       <ModalComingSoon open={comingSoon} onClose={() => setComingSoon(false)} />
 
-      {/* HERO - Updated Video Background without autoplay */}
+      {/* HERO - RESPONSIVE Video Background for iPad and all devices */}
       <header className="relative px-4 pt-28 sm:pt-32 overflow-hidden min-h-screen">
-        {/* Static Hero Background - No autoplaying video */}
+        {/* Video Background - RESPONSIVE for all devices */}
         <div className="absolute inset-0 z-0 overflow-hidden">
-          {/* Enhanced red background for hero */}
-          <div className="absolute inset-0 bg-gradient-to-b from-red-900 via-red-800 to-red-900" />
+          <div className="absolute inset-0 w-full h-full">
+            {/* Responsive container with aspect ratio for iPad optimization */}
+            <div className="absolute top-0 left-0 w-full h-full">
+              <div className="relative w-full h-full">
+                {/* Responsive iframe that works on all devices including iPad */}
+                <div className="absolute inset-0 w-full h-full flex items-center justify-center">
+                  <div className="relative w-full h-full min-w-[100%] min-h-[100%]">
+                    <iframe
+                      allow="autoplay; fullscreen"
+                      allowFullScreen
+                      src="https://streamable.com/e/6zg015?autoplay=1&muted=1&loop=1&controls=0&background=1"
+                      title="Spankmas Hero Video"
+                      className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-[200%] h-[200%] 
+                        min-w-[200%] min-h-[200%] max-w-none
+                        sm:w-[180%] sm:h-[180%]
+                        md:w-[160%] md:h-[160%]
+                        lg:w-[140%] lg:h-[140%]
+                        xl:w-[120%] xl:h-[120%]
+                        2xl:w-[110%] 2xl:h-[110%]"
+                      style={{ border: "none" }}
+                      sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Gradient overlay */}
+          <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/60 to-black/80" />
           
-          {/* Subtle animated gradient overlay */}
-          <div className="absolute inset-0 bg-gradient-to-r from-red-600/20 via-red-500/10 to-red-600/20 animate-pulse" />
-          
-          {/* Sparkle overlay */}
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_30%,rgba(255,255,255,0.1),transparent_40%),radial-gradient(circle_at_80%_70%,rgba(255,215,0,0.05),transparent_40%)]" />
+          {/* Fallback image for very small screens */}
+          <div className="absolute inset-0 bg-gradient-to-b from-red-900 via-red-800 to-red-900 md:hidden"></div>
         </div>
         
         <div className="relative mx-auto grid max-w-6xl items-center gap-8 sm:gap-10 pb-14 h-full sm:grid-cols-2 sm:pb-20 z-20">
